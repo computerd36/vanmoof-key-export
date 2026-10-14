@@ -1,0 +1,5 @@
+# Exported keys must never be committed
+*.json
+
+__pycache__/
+.DS_Store
