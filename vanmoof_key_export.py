@@ -17,6 +17,7 @@ import urllib.request
 __version__ = "1.0.0"
 
 # Static key shipped with the official app, identical for every user.
+# It has been public for years and is not a secret.
 API_KEY = "fcb38d47-f14b-30cf-843b-26283f6a5819"
 
 # my.vanmoof.com no longer resolves; it stays as a fallback in case it comes back.
@@ -45,23 +46,37 @@ class ConnectionFailed(ExportError):
     pass
 
 
+class HTTPStatusError(ExportError):
+    def __init__(self, url, code):
+        super().__init__(f"{url} returned HTTP {code}.")
+        self.code = code
+
+
+def is_connection_error(exc):
+    # Network-level failures (DNS, refused, unreachable, timeout) justify trying
+    # the other host. TLS errors are OSErrors too, but the other host would fail
+    # the same way.
+    return isinstance(exc, OSError) and not isinstance(exc, ssl.SSLError)
+
+
 def request_json(method, url, headers):
-    headers = {"Accept": "application/json", "User-Agent": USER_AGENT, **headers}
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": USER_AGENT,
+        "Api-Key": API_KEY,
+        **headers,
+    }
     data = b"" if method == "POST" else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
             body = resp.read()
     except urllib.error.HTTPError as e:
-        if e.code in (401, 403):
-            raise AuthError(
-                f"The VanMoof API rejected the login (HTTP {e.code}). "
-                "Check your email address and password."
-            ) from None
-        raise ExportError(f"{url} returned HTTP {e.code}.") from None
+        raise HTTPStatusError(url, e.code) from None
     except urllib.error.URLError as e:
+        if is_connection_error(e.reason):
+            raise ConnectionFailed(str(e.reason)) from None
         if isinstance(e.reason, ssl.SSLCertVerificationError):
-            # Not a connectivity problem, the other host would fail the same way.
             detail = getattr(e.reason, "verify_message", None) or e.reason
             raise ExportError(
                 f"TLS certificate verification failed for {url}: {detail}.\n"
@@ -70,10 +85,12 @@ def request_json(method, url, headers):
                 "Python folder in Applications, or start the script with "
                 "SSL_CERT_FILE=$(python3 -m certifi)."
             ) from None
-        raise ConnectionFailed(str(e.reason)) from None
+        raise ExportError(f"Request to {url} failed: {e.reason}") from None
     except OSError as e:
-        # Timeouts and connection resets while reading the response.
-        raise ConnectionFailed(str(e) or type(e).__name__) from None
+        # Raised directly (not wrapped in URLError) while reading the response.
+        if is_connection_error(e):
+            raise ConnectionFailed(str(e) or type(e).__name__) from None
+        raise ExportError(f"Request to {url} failed: {e}") from None
 
     try:
         return json.loads(body)
@@ -83,21 +100,29 @@ def request_json(method, url, headers):
 
 def authenticate(base_url, email, password):
     credentials = base64.b64encode(f"{email}:{password}".encode()).decode()
-    data = request_json(
-        "POST",
-        f"{base_url}/authenticate",
-        {"Api-Key": API_KEY, "Authorization": f"Basic {credentials}"},
-    )
+    try:
+        data = request_json(
+            "POST",
+            f"{base_url}/authenticate",
+            {"Authorization": f"Basic {credentials}"},
+        )
+    except HTTPStatusError as e:
+        if e.code in (401, 403):
+            raise AuthError(
+                f"The VanMoof API rejected the login (HTTP {e.code}). "
+                "Check your email address and password."
+            ) from None
+        raise
     token = data.get("token") if isinstance(data, dict) else None
     if not token:
         raise ExportError("Login response did not contain a token.")
     return token
 
 
-def login(email, password, base_urls=BASE_URLS):
+def login(email, password):
     """Return (base_url, token) for the first host that can be reached."""
     failures = []
-    for base_url in base_urls:
+    for base_url in BASE_URLS:
         try:
             return base_url, authenticate(base_url, email, password)
         except ConnectionFailed as e:
@@ -111,12 +136,12 @@ def get_bikes(base_url, token):
     data = request_json(
         "GET",
         f"{base_url}/getCustomerData?includeBikeDetails",
-        {"Api-Key": API_KEY, "Authorization": f"Bearer {token}"},
+        {"Authorization": f"Bearer {token}"},
     )
     try:
         bikes = data["data"].get("bikeDetails") or []
     except (KeyError, TypeError, AttributeError):
-        raise ExportError("Unexpected response format from getCustomerData.") from None
+        bikes = None
     if not isinstance(bikes, list):
         raise ExportError("Unexpected response format from getCustomerData.")
     return bikes
@@ -191,7 +216,6 @@ def run(args):
         raise ExportError("No password given.")
 
     base_url, token = login(email, password)
-    del password
     bikes = get_bikes(base_url, token)
 
     if not bikes:
