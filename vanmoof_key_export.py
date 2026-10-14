@@ -9,6 +9,7 @@ import base64
 import getpass
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.request
@@ -59,6 +60,16 @@ def request_json(method, url, headers):
             ) from None
         raise ExportError(f"{url} returned HTTP {e.code}.") from None
     except urllib.error.URLError as e:
+        if isinstance(e.reason, ssl.SSLCertVerificationError):
+            # Not a connectivity problem, the other host would fail the same way.
+            detail = getattr(e.reason, "verify_message", None) or e.reason
+            raise ExportError(
+                f"TLS certificate verification failed for {url}: {detail}.\n"
+                "Most likely your Python cannot find any CA certificates. With the python.org "
+                "installer on macOS, run 'Install Certificates.command' from the "
+                "Python folder in Applications, or start the script with "
+                "SSL_CERT_FILE=$(python3 -m certifi)."
+            ) from None
         raise ConnectionFailed(str(e.reason)) from None
     except OSError as e:
         # Timeouts and connection resets while reading the response.

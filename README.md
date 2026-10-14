@@ -44,6 +44,11 @@ Found 1 bike(s):
   Account MAC:   F8:8A:5E:00:11:22
 ```
 
+If you get `CERTIFICATE_VERIFY_FAILED` on macOS, your Python has no CA certificates
+installed, which is common with the python.org installer. Run
+`Install Certificates.command` from the Python folder in Applications, or use
+`SSL_CERT_FILE=$(python3 -m certifi) python3 vanmoof_key_export.py`.
+
 ### Options
 
 | Option         | Description                                                         |

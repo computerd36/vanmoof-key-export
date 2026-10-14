@@ -3,6 +3,7 @@ import io
 import json
 import os
 import socket
+import ssl
 import stat
 import sys
 import tempfile
@@ -115,6 +116,22 @@ class LoginTests(unittest.TestCase):
             with self.assertRaises(vke.ExportError) as ctx:
                 vke.login("me@example.com", "secret")
         self.assertIn("Could not reach", str(ctx.exception))
+
+    def test_certificate_error_stops_without_fallback(self):
+        calls = []
+
+        def urlopen(req, timeout=None):
+            calls.append(req.full_url)
+            err = ssl.SSLCertVerificationError(1, "certificate verify failed")
+            err.verify_message = "unable to get local issuer certificate"
+            raise urllib.error.URLError(err)
+
+        with mock.patch("urllib.request.urlopen", urlopen):
+            with self.assertRaises(vke.ExportError) as ctx:
+                vke.login("me@example.com", "secret")
+        self.assertNotIsInstance(ctx.exception, vke.ConnectionFailed)
+        self.assertIn("Install Certificates.command", str(ctx.exception))
+        self.assertEqual(len(calls), 1)
 
     def test_401_stops_without_fallback(self):
         api = FakeApi(auth_status=401)
