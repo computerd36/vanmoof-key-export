@@ -1,5 +1,7 @@
 # vanmoof-key-export
 
+[![tests](https://github.com/computerd36/vanmoof-key-export/actions/workflows/tests.yml/badge.svg)](https://github.com/computerd36/vanmoof-key-export/actions/workflows/tests.yml)
+
 Exports the Bluetooth encryption key of VanMoof S3 and X3 e-bikes from your VanMoof
 account.
 
